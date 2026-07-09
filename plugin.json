@@ -1,0 +1,18 @@
+{
+	"ver": 1,
+	"name": "Journal Day Shortcuts",
+	"icon": "calendar",
+	"description": "Keyboard shortcuts for previous/next day in the journal.",
+	"instructions": "Click a shortcut row and press the key combination you want. Shortcuts work when the journal is focused; swipe gestures apply on trackpads when enabled.",
+	"author": "@akaready",
+	"homepage": "https://akaready.com",
+	"repository": "https://github.com/akaready/thymer-journal-day-shortcuts",
+	"coffee": "https://buymeacoffee.com/akaready",
+	"version": "1.0.0",
+	"__source_repo": "https://github.com/akaready/thymer-journal-day-shortcuts",
+	"__source_files": {
+		"branch": "main",
+		"json": "plugin.json",
+		"js": "plugin.js"
+	}
+}
