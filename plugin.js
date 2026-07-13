@@ -2416,7 +2416,7 @@ ${report}
     return wrap;
   }
   __name(renderPluginHeaderHelper, "renderPluginHeaderHelper");
-  function pluginHeaderFromConfig(conf, { version, helper, helperOpen, helperDefaultOpen, onHelperToggle, killSwitch, feedback } = {}) {
+  function pluginHeaderFromConfig(conf, { version, helper, helperOpen, helperDefaultOpen, onHelperToggle, killSwitch, feedback, scope } = {}) {
     const resolvedHelper = helper ?? conf.instructions;
     return pluginHeader({
       title: conf.name || "",
@@ -2432,7 +2432,8 @@ ${report}
       repository: conf.repository,
       coffee: conf.coffee,
       killSwitch,
-      feedback
+      feedback,
+      scope
     });
   }
   __name(pluginHeaderFromConfig, "pluginHeaderFromConfig");
@@ -2672,11 +2673,217 @@ ${report}
   }
   __name(setPluginDisabled, "setPluginDisabled");
 
+  // ../../shared/plugin-settings.js
+  function createSettingsStore(plugin, {
+    slug,
+    key = "settings",
+    version,
+    normalize = /* @__PURE__ */ __name((raw) => raw && typeof raw === "object" ? raw : {}, "normalize"),
+    scopeKey = null,
+    readSynced = null,
+    pickSynced = null
+  }) {
+    const readSyncedBlob = readSynced || ((custom) => custom?.[key]);
+    const pickSyncedSubset = pickSynced || ((s) => s);
+    let current = {};
+    let diverged = false;
+    let pushInFlight = false;
+    const workspaceGuid = /* @__PURE__ */ __name(() => {
+      try {
+        const guid = plugin.getWorkspaceGuid?.();
+        if (guid) return guid;
+      } catch {
+      }
+      return "default";
+    }, "workspaceGuid");
+    const storageKey = /* @__PURE__ */ __name(() => {
+      const scope = scopeKey ? `/${scopeKey()}` : "";
+      return `${slug}/${workspaceGuid()}${scope}/settings`;
+    }, "storageKey");
+    const readCustom = /* @__PURE__ */ __name(() => {
+      try {
+        const conf = plugin.getConfiguration?.();
+        const custom = conf && conf.custom;
+        return custom && typeof custom === "object" ? (
+          /** @type {Record<string, unknown>} */
+          custom
+        ) : {};
+      } catch {
+        return {};
+      }
+    }, "readCustom");
+    const readLocalRaw = /* @__PURE__ */ __name(() => {
+      try {
+        const raw = localStorage.getItem(storageKey());
+        if (raw === null) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : {};
+      } catch {
+        return null;
+      }
+    }, "readLocalRaw");
+    const normalizedStringify = /* @__PURE__ */ __name((raw) => JSON.stringify(normalize(raw)), "normalizedStringify");
+    const store = {
+      /** Read-only: never writes either store. */
+      load() {
+        const local = readLocalRaw();
+        if (local !== null) {
+          current = normalize(local);
+          diverged = true;
+        } else {
+          current = normalize(readSyncedBlob(readCustom()) || {});
+          diverged = false;
+        }
+        return { settings: current, diverged };
+      },
+      get() {
+        return current;
+      },
+      isDiverged() {
+        return diverged;
+      },
+      /**
+       * Every edit is device-local. First edit snapshots the FULL settings
+       * (inherited values of untouched keys survive). localStorage throwing
+       * (private mode) leaves the edit in memory for the session — still
+       * reported diverged so the pill/push UI works, and push still syncs.
+       */
+      update(patch) {
+        current = normalize({ ...current, ...patch });
+        if (normalizedStringify(readSyncedBlob(readCustom())) === JSON.stringify(current)) {
+          try {
+            localStorage.removeItem(storageKey());
+          } catch {
+          }
+          diverged = false;
+          return { settings: current, diverged };
+        }
+        diverged = true;
+        try {
+          localStorage.setItem(storageKey(), JSON.stringify(current));
+        } catch {
+        }
+        return { settings: current, diverged };
+      },
+      /**
+       * The explicit ↑ "Apply to all devices": ONE saveConfiguration (which
+       * reloads the plugin), then the local blob is cleared so this device
+       * goes back to following the synced config. Resolves true when the
+       * settings are known to be in synced config (pushed or already equal).
+       */
+      async pushToAll() {
+        if (pushInFlight) return false;
+        pushInFlight = true;
+        try {
+          const api = await resolveConfigApi(plugin);
+          if (!api || typeof api.saveConfiguration !== "function") return false;
+          let conf = {};
+          try {
+            conf = api.getConfiguration?.() || plugin.getConfiguration?.() || {};
+          } catch {
+            return false;
+          }
+          if (typeof conf.name !== "string" || !conf.name.trim()) return false;
+          const custom = conf.custom && typeof conf.custom === "object" ? conf.custom : {};
+          const subset = pickSyncedSubset(normalize(current));
+          try {
+            localStorage.removeItem(storageKey());
+          } catch {
+          }
+          diverged = false;
+          try {
+            if (normalizedStringify(readSyncedBlob(
+              /** @type {any} */
+              custom
+            )) !== normalizedStringify(subset)) {
+              await api.saveConfiguration(configWithPluginVersion(conf, { [key]: subset }, version));
+            }
+          } catch (err) {
+            try {
+              localStorage.setItem(storageKey(), JSON.stringify(current));
+            } catch {
+            }
+            diverged = true;
+            throw err;
+          }
+          return true;
+        } catch {
+          return false;
+        } finally {
+          pushInFlight = false;
+        }
+      },
+      /** The ↺ "Discard device changes": drop local, re-adopt synced. */
+      discardLocal() {
+        try {
+          localStorage.removeItem(storageKey());
+        } catch {
+        }
+        current = normalize(readSyncedBlob(readCustom()) || {});
+        diverged = false;
+        return current;
+      },
+      /**
+       * For folding into `setPluginDisabled(plugin, off, version, customPatch)`
+       * so a kill-switch toggle carries staged device settings in the SAME
+       * save (one reload, no race — CLAUDE.md rule). Call markFlushed() after
+       * that save succeeds if the fold should count as a push.
+       */
+      pendingCustomPatch() {
+        return diverged ? { [key]: pickSyncedSubset(normalize(current)) } : {};
+      },
+      markFlushed() {
+        try {
+          localStorage.removeItem(storageKey());
+        } catch {
+        }
+        diverged = false;
+      },
+      /**
+       * Live-follow for non-diverged devices: when another device pushes,
+       * `global-plugin.updated` fires here; re-read the synced blob and, if
+       * it changed semantically, hand the fresh settings to the plugin's
+       * central apply (which each plugin already guards with its kill
+       * switch). Returns a detach function for onUnload.
+       */
+      attachLifecycle({ onRemoteChange } = {}) {
+        const handlerIds = [];
+        try {
+          const id = plugin.events?.on?.("global-plugin.updated", (event) => {
+            try {
+              if (diverged) return;
+              if (event?.source?.isLocal) return;
+              const guid = plugin.getGuid?.();
+              const eventGuid = event?.pluginGuid || event?.guid || event?.rootId || null;
+              if (eventGuid && guid && eventGuid !== guid) return;
+              const next = normalize(readSyncedBlob(readCustom()) || {});
+              if (JSON.stringify(next) === JSON.stringify(current)) return;
+              current = next;
+              onRemoteChange?.(current);
+            } catch {
+            }
+          });
+          if (id) handlerIds.push(id);
+        } catch {
+        }
+        return () => {
+          for (const id of handlerIds) {
+            try {
+              plugin.events?.off?.(id);
+            } catch {
+            }
+          }
+        };
+      }
+    };
+    return store;
+  }
+  __name(createSettingsStore, "createSettingsStore");
+
   // plugin.js
-  var PLUGIN_VERSION = "1.1.6";
+  var PLUGIN_VERSION = "1.2.0";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
-  var SETTINGS_STORAGE_PREFIX = "journal-day-shortcuts:settings:";
   var SWIPE_DIR_RATIO = 1.4;
   function numOr(value, fallback) {
     const n = Number(value);
@@ -2721,6 +2928,47 @@ ${report}
     "nudge",
     "rubberband"
   ]);
+  function normalizeSettings(raw) {
+    const src = (
+      /** @type {Record<string, any>} */
+      raw && typeof raw === "object" ? raw : {}
+    );
+    const out = {
+      enabled: typeof src.enabled === "boolean" ? src.enabled : DEFAULTS.enabled,
+      prev: typeof src.prev === "string" && src.prev.trim() ? src.prev : DEFAULTS.prev,
+      next: typeof src.next === "string" && src.next.trim() ? src.next : DEFAULTS.next,
+      swipeEnabled: typeof src.swipeEnabled === "boolean" ? src.swipeEnabled : DEFAULTS.swipeEnabled,
+      swipeInverted: typeof src.swipeInverted === "boolean" ? src.swipeInverted : DEFAULTS.swipeInverted,
+      swipeSpikeDelta: numOr(src.swipeSpikeDelta, DEFAULTS.swipeSpikeDelta),
+      swipeBurstEndMs: numOr(src.swipeBurstEndMs, DEFAULTS.swipeBurstEndMs),
+      swipeShake: typeof src.swipeShake === "boolean" ? src.swipeShake : DEFAULTS.swipeShake
+    };
+    const zones = (
+      /** @type {Record<string, any>} */
+      src.swipeZones && typeof src.swipeZones === "object" ? src.swipeZones : {}
+    );
+    const zoneDefaults = (
+      /** @type {Record<string, any>} */
+      DEFAULTS.swipeZones
+    );
+    const outZones = {};
+    for (const z of ZONES) {
+      const dflt = { ...ZONE_DEFAULT, ...zoneDefaults[z.key] || {} };
+      const cfg = (
+        /** @type {Record<string, any>} */
+        zones[z.key] && typeof zones[z.key] === "object" ? zones[z.key] : {}
+      );
+      outZones[z.key] = {
+        enabled: typeof cfg.enabled === "boolean" ? cfg.enabled : dflt.enabled,
+        type: FLICK_ANIM_TYPES.includes(cfg.type) ? cfg.type : dflt.type,
+        duration: numOr(cfg.duration, dflt.duration),
+        amplitude: numOr(cfg.amplitude, dflt.amplitude)
+      };
+    }
+    out.swipeZones = outZones;
+    return out;
+  }
+  __name(normalizeSettings, "normalizeSettings");
   function flickKeyframes(type, amp, dir) {
     const a = amp;
     switch (type) {
@@ -2945,7 +3193,20 @@ ${report}
       this._wheelHandler = null;
       this._locked = false;
       this._lockTimer = null;
-      this._settings = this._loadSettings();
+      this._detachSettingsLifecycle = null;
+      this._settingsStore = createSettingsStore(this, {
+        slug: "journal-day-shortcuts",
+        key: "settings",
+        version: PLUGIN_VERSION,
+        normalize: normalizeSettings,
+        readSynced: /* @__PURE__ */ __name((custom) => {
+          if (custom.settings && typeof custom.settings === "object") return custom.settings;
+          const out = {};
+          for (const k of Object.keys(DEFAULTS)) if (k in custom) out[k] = custom[k];
+          return out;
+        }, "readSynced")
+      });
+      this._settings = this._settingsStore.load().settings;
       this.ui.injectCSS(PANEL_CSS);
       this.ui.injectCSS(`
 			.${ROOT_CLASS}-panel .tps-key-row {
@@ -2992,19 +3253,6 @@ ${report}
 				display: flex;
 				gap: var(--tps-space-2);
 				margin-top: var(--tps-space-5);
-			}
-			.${ROOT_CLASS}-panel .tps-button--save {
-				background: color-mix(in srgb, var(--tps-success) 18%, transparent);
-				border-color: color-mix(in srgb, var(--tps-success) 55%, transparent);
-				color: var(--tps-success);
-			}
-			.${ROOT_CLASS}-panel .tps-button--save:hover:not(:disabled) {
-				background: color-mix(in srgb, var(--tps-success) 28%, transparent);
-				border-color: var(--tps-success);
-			}
-			.${ROOT_CLASS}-panel .tps-button--save:disabled {
-				opacity: 0.5;
-				cursor: not-allowed;
 			}
 			.${ROOT_CLASS}-panel .jds-zone-row {
 				display: grid;
@@ -3112,6 +3360,13 @@ ${report}
         this._panelEl = root;
         this._renderSettings();
       });
+      this._detachSettingsLifecycle = this._settingsStore.attachLifecycle({
+        onRemoteChange: /* @__PURE__ */ __name((settings) => {
+          this._settings = settings;
+          this._applySettings();
+          this._renderSettings();
+        }, "onRemoteChange")
+      });
       try {
         const staleRoot = document.querySelector(".plg-journal-day-shortcuts-panel");
         if (staleRoot && staleRoot.parentElement) {
@@ -3137,6 +3392,11 @@ ${report}
     onUnload() {
       this._removeKeyListener();
       this._removeSwipeListener();
+      try {
+        this._detachSettingsLifecycle?.();
+      } catch {
+      }
+      this._detachSettingsLifecycle = null;
       for (const id of this._handlerIds || []) this.events.off(id);
       this._handlerIds = /** @type {string[]} */
       [];
@@ -3213,60 +3473,74 @@ ${report}
     }
     // ── settings persistence ───────────────────────────────────────────
     //
-    // Thymer's saveConfiguration() drops unknown top-level keys; only
-    // `custom` survives. We also write to localStorage so settings survive
-    // any Thymer-side reset of the plugin config.
-    _storageKey() {
-      const ws = typeof this.getWorkspaceGuid === "function" ? this.getWorkspaceGuid() : "default";
-      return SETTINGS_STORAGE_PREFIX + ws;
+    // All persistence goes through the shared per-device settings store
+    // (shared/plugin-settings.js): every edit applies live and lands
+    // device-local immediately; the synced config (custom.settings) is
+    // written only by the header pill's explicit "Apply to all devices"
+    // push. This replaced the pre-1.2.0 _persistSettings, whose
+    // this.saveConfiguration call never existed on AppPlugin instances —
+    // its config sync was a silent no-op.
+    /**
+     * Central live-apply: refresh the key/swipe listeners from current
+     * settings. The install guards respect the kill switch, so panel edits
+     * made while disabled stage without leaking effects.
+     */
+    _applySettings() {
+      this._removeKeyListener();
+      this._installKeyListener();
+      this._removeSwipeListener();
+      this._installSwipeListener();
     }
-    _loadSettings() {
-      let stored = null;
-      try {
-        const raw = localStorage.getItem(this._storageKey());
-        if (raw) stored = JSON.parse(raw);
-      } catch {
-      }
-      const conf = (
-        /** @type {Record<string, any>} */
-        typeof this.getConfiguration === "function" ? this.getConfiguration() || {} : {}
-      );
-      const cust = conf.custom && typeof conf.custom === "object" ? conf.custom : {};
-      const merged = { ...DEFAULTS, ...conf, ...cust, ...stored || {} };
-      const zones = (
-        /** @type {Record<string, any>} */
-        merged.swipeZones && typeof merged.swipeZones === "object" ? merged.swipeZones : {}
-      );
-      const mergedZones = {};
-      const zoneDefaults = (
-        /** @type {Record<string, any>} */
-        DEFAULTS.swipeZones
-      );
-      for (const z of ZONES) {
-        const dflt = zoneDefaults[z.key] || ZONE_DEFAULT;
-        mergedZones[z.key] = { ...ZONE_DEFAULT, ...dflt, ...zones[z.key] || {} };
-      }
-      merged.swipeZones = mergedZones;
-      return merged;
+    /** @param {Record<string, any>} patch */
+    _updateSettings(patch) {
+      this._settings = this._settingsStore.update(patch).settings;
+      this._applySettings();
+      this._refreshScopePill();
     }
-    async _persistSettings() {
-      try {
-        localStorage.setItem(this._storageKey(), JSON.stringify(this._settings));
-      } catch {
-      }
-      try {
-        const conf = (
-          /** @type {Record<string, any>} */
-          typeof this.getConfiguration === "function" ? this.getConfiguration() || {} : {}
-        );
-        const next = { ...conf, custom: { ...conf.custom || {}, ...this._settings } };
-        const saveFn = (
-          /** @type {any} */
-          this.saveConfiguration
-        );
-        if (typeof saveFn === "function") await saveFn.call(this, next);
-      } catch {
-      }
+    /**
+     * Zone edits patch the FULL swipeZones object — the store's update()
+     * merges shallowly at the top level, so a nested zone change must carry
+     * its siblings along.
+     * @param {string} zoneKey @param {Record<string, any>} zonePatch
+     */
+    _updateZone(zoneKey, zonePatch) {
+      const zones = JSON.parse(JSON.stringify(this._settings.swipeZones || {}));
+      zones[zoneKey] = { ...ZONE_DEFAULT, ...zones[zoneKey] || {}, ...zonePatch };
+      this._updateSettings({ swipeZones: zones });
+    }
+    /**
+     * Scope-cluster wiring for the header pill: push = one saveConfiguration
+     * (the reload's hot-reload heal re-renders the panel); discard = two-tap
+     * armed in the shared cluster, then re-adopt synced values here.
+     */
+    _scopeArgs() {
+      return {
+        diverged: this._settingsStore.isDiverged(),
+        onPush: /* @__PURE__ */ __name(() => {
+          void this._settingsStore.pushToAll().then((ok) => {
+            if (!ok) return;
+            try {
+              this.ui.addToaster({ title: "Journal Day Shortcuts", message: "Settings applied to all devices", dismissible: true, autoDestroyTime: 3e3 });
+            } catch {
+            }
+            this._refreshScopePill();
+          });
+        }, "onPush"),
+        onDiscard: /* @__PURE__ */ __name(() => {
+          this._settings = this._settingsStore.discardLocal();
+          this._applySettings();
+          this._renderSettings();
+          try {
+            this.ui.addToaster({ title: "Journal Day Shortcuts", message: "Reverted to synced settings", dismissible: true, autoDestroyTime: 3e3 });
+          } catch {
+          }
+        }, "onDiscard")
+      };
+    }
+    /** Swap just the pill cluster — never nukes inputs mid-edit. */
+    _refreshScopePill() {
+      const el2 = this._panelEl?.querySelector?.(".tps-scope");
+      if (el2) el2.replaceWith(scopeCluster(this._scopeArgs()));
     }
     // ── swipe listener (trackpad two-finger horizontal flick) ──────────
     //
@@ -3394,25 +3668,8 @@ ${report}
     }
     _renderSettings() {
       if (!this._panelEl) return;
-      const draft = {
-        ...this._settings,
-        swipeZones: JSON.parse(JSON.stringify(this._settings.swipeZones || DEFAULTS.swipeZones))
-      };
+      const s = this._settings;
       const conf = typeof this.getConfiguration === "function" ? this.getConfiguration() || {} : {};
-      let saveBtn = null;
-      const numKeys = ["swipeSpikeDelta", "swipeBurstEndMs"];
-      const markDirty = /* @__PURE__ */ __name(() => {
-        let dirty = draft.prev !== this._settings.prev || draft.next !== this._settings.next || draft.enabled !== this._settings.enabled || !!draft.swipeEnabled !== !!this._settings.swipeEnabled || !!draft.swipeInverted !== !!this._settings.swipeInverted || !!draft.swipeShake !== !!this._settings.swipeShake || JSON.stringify(draft.swipeZones) !== JSON.stringify(this._settings.swipeZones);
-        if (!dirty) {
-          for (const k of numKeys) {
-            if (Number(draft[k]) !== Number(this._settings[k])) {
-              dirty = true;
-              break;
-            }
-          }
-        }
-        if (saveBtn) saveBtn.disabled = !dirty;
-      }, "markDirty");
       const keyRow = /* @__PURE__ */ __name((which, labelText) => {
         const row = document.createElement("div");
         row.className = "tps-key-row";
@@ -3422,7 +3679,7 @@ ${report}
         const chip = document.createElement("button");
         chip.type = "button";
         chip.className = "tps-key-chip";
-        chip.textContent = draft[which];
+        chip.textContent = s[which];
         chip.setAttribute("aria-label", `${labelText} \u2014 click to rebind`);
         let capturing = false;
         let onCaptureKey = null;
@@ -3434,7 +3691,7 @@ ${report}
             window.removeEventListener("keydown", onCaptureKey, true);
             onCaptureKey = null;
           }
-          if (!commit) chip.textContent = draft[which];
+          if (!commit) chip.textContent = this._settings[which];
         }, "stopCapturing");
         chip.addEventListener("click", () => {
           if (capturing) {
@@ -3455,10 +3712,9 @@ ${report}
             if (!combo) return;
             ev.preventDefault();
             ev.stopPropagation();
-            draft[which] = combo;
             chip.textContent = combo;
             stopCapturing(true);
-            markDirty();
+            this._updateSettings({ [which]: combo });
           }, "onCaptureKey");
           window.addEventListener("keydown", onCaptureKey, true);
         });
@@ -3470,11 +3726,10 @@ ${report}
         name: "enabled",
         label: "Enable keyboard shortcuts",
         desc: "When off, the command palette entries still work but the keystrokes are ignored.",
-        checked: draft.enabled,
+        checked: s.enabled,
         onChange: /* @__PURE__ */ __name((e) => {
-          draft.enabled = !!/** @type {HTMLInputElement} */
-          e.target.checked;
-          markDirty();
+          this._updateSettings({ enabled: !!/** @type {HTMLInputElement} */
+          e.target.checked });
         }, "onChange")
       });
       const swipeEnabledOpt = optionRow({
@@ -3482,11 +3737,10 @@ ${report}
         name: "swipeEnabled",
         label: "Enable trackpad swipe",
         desc: "Two-finger horizontal flick on a journal page navigates between days. Vertical scrolling is unaffected.",
-        checked: draft.swipeEnabled,
+        checked: s.swipeEnabled,
         onChange: /* @__PURE__ */ __name((e) => {
-          draft.swipeEnabled = !!/** @type {HTMLInputElement} */
-          e.target.checked;
-          markDirty();
+          this._updateSettings({ swipeEnabled: !!/** @type {HTMLInputElement} */
+          e.target.checked });
         }, "onChange")
       });
       const swipeInvertedOpt = optionRow({
@@ -3494,11 +3748,10 @@ ${report}
         name: "swipeInverted",
         label: "Invert swipe direction",
         desc: "Off: swipe right \u2192 next day (natural scroll). On: swipe right \u2192 previous day (page-turn metaphor).",
-        checked: draft.swipeInverted,
+        checked: s.swipeInverted,
         onChange: /* @__PURE__ */ __name((e) => {
-          draft.swipeInverted = !!/** @type {HTMLInputElement} */
-          e.target.checked;
-          markDirty();
+          this._updateSettings({ swipeInverted: !!/** @type {HTMLInputElement} */
+          e.target.checked });
         }, "onChange")
       });
       const numberRow = /* @__PURE__ */ __name((key, labelText, unitText, hint) => {
@@ -3514,23 +3767,22 @@ ${report}
         right.style.gap = "6px";
         const input = document.createElement("input");
         input.type = "number";
-        input.value = String(draft[key]);
+        input.value = String(s[key]);
         input.className = "tps-num-input";
         input.style.width = "110px";
         input.setAttribute("aria-label", labelText);
         const live = /* @__PURE__ */ __name(() => {
           const n = Number(input.value);
-          if (Number.isFinite(n)) draft[key] = n;
-          markDirty();
+          if (Number.isFinite(n)) this._updateSettings({ [key]: n });
         }, "live");
         const finalize = /* @__PURE__ */ __name((v) => {
           const n = Number(v);
-          draft[key] = Number.isFinite(n) ? n : (
+          const next = Number.isFinite(n) ? n : (
             /** @type {Record<string, any>} */
             DEFAULTS[key]
           );
-          input.value = String(draft[key]);
-          markDirty();
+          input.value = String(next);
+          this._updateSettings({ [key]: next });
         }, "finalize");
         input.addEventListener("input", live);
         input.addEventListener("change", () => finalize(input.value));
@@ -3555,16 +3807,14 @@ ${report}
         name: "swipeShake",
         label: "Animate on commit",
         desc: "Master toggle for the post-commit feedback animation. Off = no visual effect on swipe (page still changes).",
-        checked: draft.swipeShake,
+        checked: s.swipeShake,
         onChange: /* @__PURE__ */ __name((e) => {
-          draft.swipeShake = !!/** @type {HTMLInputElement} */
-          e.target.checked;
-          markDirty();
+          this._updateSettings({ swipeShake: !!/** @type {HTMLInputElement} */
+          e.target.checked });
         }, "onChange")
       });
       const zoneRow = /* @__PURE__ */ __name((z) => {
-        if (!draft.swipeZones[z.key]) draft.swipeZones[z.key] = { ...ZONE_DEFAULT };
-        const cfg = draft.swipeZones[z.key];
+        const cfg = s.swipeZones[z.key] || { ...ZONE_DEFAULT };
         const row = document.createElement("div");
         row.className = "jds-zone-row";
         const left = document.createElement("label");
@@ -3573,8 +3823,7 @@ ${report}
         cb.type = "checkbox";
         cb.checked = !!cfg.enabled;
         cb.addEventListener("change", () => {
-          cfg.enabled = cb.checked;
-          markDirty();
+          this._updateZone(z.key, { enabled: cb.checked });
         });
         const labelEl = document.createElement("div");
         labelEl.className = "jds-zone-label";
@@ -3600,8 +3849,7 @@ ${report}
           styleSel.appendChild(opt);
         }
         styleSel.addEventListener("change", () => {
-          cfg.type = styleSel.value;
-          markDirty();
+          this._updateZone(z.key, { type: styleSel.value });
         });
         styleCtl.append(styleLab, styleSel);
         const numCtl = /* @__PURE__ */ __name((label, unit, key, fallback) => {
@@ -3616,14 +3864,13 @@ ${report}
           input.setAttribute("aria-label", `${z.label} ${label}`);
           const live = /* @__PURE__ */ __name(() => {
             const n = Number(input.value);
-            if (Number.isFinite(n)) cfg[key] = n;
-            markDirty();
+            if (Number.isFinite(n)) this._updateZone(z.key, { [key]: n });
           }, "live");
           const finalize = /* @__PURE__ */ __name((v) => {
             const n = Number(v);
-            cfg[key] = Number.isFinite(n) ? n : fallback;
-            input.value = String(cfg[key]);
-            markDirty();
+            const next = Number.isFinite(n) ? n : fallback;
+            input.value = String(next);
+            this._updateZone(z.key, { [key]: next });
           }, "finalize");
           input.addEventListener("input", live);
           input.addEventListener("change", () => finalize(input.value));
@@ -3652,65 +3899,14 @@ ${report}
       const swipeBurstEndRow = numberRow("swipeBurstEndMs", "Burst-end gap (silence)", "ms", "How long the trackpad must be silent after a commit before the next flick can fire. Lower = snappier rapid-fire, but easier for inertia to double-trigger.");
       const footer = document.createElement("div");
       footer.className = "tps-footer";
-      const saveButton = button({
-        label: "Save Settings",
-        variant: "ghost",
-        size: "md",
-        onClick: /* @__PURE__ */ __name(async () => {
-          this._settings = {
-            ...this._settings,
-            ...draft,
-            swipeZones: JSON.parse(JSON.stringify(draft.swipeZones))
-          };
-          await this._persistSettings();
-          this._removeKeyListener();
-          this._installKeyListener();
-          this._removeSwipeListener();
-          this._installSwipeListener();
-          markDirty();
-          try {
-            this.ui.addToaster({
-              title: "Journal Day Shortcuts saved",
-              dismissible: true,
-              autoDestroyTime: 2e3
-            });
-          } catch {
-          }
-        }, "onClick")
-      });
-      saveButton.classList.add("tps-button--save");
-      saveButton.disabled = true;
-      saveBtn = saveButton;
       const resetBtn = button({
         label: "Reset to defaults",
         variant: "ghost",
         size: "md",
-        onClick: /* @__PURE__ */ __name(async () => {
+        onClick: /* @__PURE__ */ __name(() => {
+          this._updateSettings(JSON.parse(JSON.stringify(DEFAULTS)));
           try {
-            localStorage.removeItem(this._storageKey());
-          } catch {
-          }
-          this._settings = { ...DEFAULTS };
-          try {
-            const conf2 = (
-              /** @type {Record<string, any>} */
-              typeof this.getConfiguration === "function" ? this.getConfiguration() || {} : {}
-            );
-            const saveFn = (
-              /** @type {any} */
-              this.saveConfiguration
-            );
-            if (typeof saveFn === "function") {
-              await saveFn.call(this, { ...conf2, custom: { ...conf2.custom || {}, ...DEFAULTS } });
-            }
-          } catch {
-          }
-          this._removeKeyListener();
-          this._installKeyListener();
-          this._removeSwipeListener();
-          this._installSwipeListener();
-          try {
-            this.ui.addToaster({ title: "Journal Day Shortcuts reset", dismissible: true, autoDestroyTime: 2e3 });
+            this.ui.addToaster({ title: "Journal Day Shortcuts", message: "Settings reset to defaults", dismissible: true, autoDestroyTime: 2e3 });
           } catch {
           }
           this._renderSettings();
@@ -3728,13 +3924,16 @@ ${report}
           }
         }, "onClick")
       });
-      footer.append(saveButton, resetBtn, closeBtn);
+      footer.append(resetBtn, closeBtn);
       this._panelEl.replaceChildren(panel({ pluginClass: `${ROOT_CLASS}-panel` }, [
         pluginHeaderFromConfig(conf, {
           version: PLUGIN_VERSION,
+          scope: this._scopeArgs(),
           killSwitch: {
             on: !this._disabled,
-            onToggle: /* @__PURE__ */ __name((nextOn) => void setPluginDisabled(this, !nextOn, PLUGIN_VERSION), "onToggle")
+            onToggle: /* @__PURE__ */ __name((nextOn) => {
+              void setPluginDisabled(this, !nextOn, PLUGIN_VERSION);
+            }, "onToggle")
           },
           feedback: { data: this.data }
         }),
