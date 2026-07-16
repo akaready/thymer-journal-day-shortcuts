@@ -3012,7 +3012,7 @@ ${report}
   __name(createSettingsStore, "createSettingsStore");
 
   // plugin.js
-  var PLUGIN_VERSION = "1.2.4";
+  var PLUGIN_VERSION = "1.2.5";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
   var SWIPE_DIR_RATIO = 1.4;
@@ -3666,7 +3666,13 @@ ${report}
         localUnavailable: !!this._settingsStore.isLocalUnavailable(),
         onPush: /* @__PURE__ */ __name(() => {
           void this._settingsStore.pushToAll().then((ok) => {
-            if (!ok) return;
+            if (!ok) {
+              try {
+                this.ui.addToaster({ title: "Journal Day Shortcuts", message: 'Could not save to all devices \u2014 the plugin config could not be written. Check the plugin\u2019s Config (does it have a "name"?) and try again.', dismissible: true, autoDestroyTime: 6e3 });
+              } catch {
+              }
+              return;
+            }
             try {
               this.ui.addToaster({ title: "Journal Day Shortcuts", message: "Settings applied to all devices", dismissible: true, autoDestroyTime: 3e3 });
             } catch {
