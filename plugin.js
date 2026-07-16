@@ -3012,7 +3012,7 @@ ${report}
   __name(createSettingsStore, "createSettingsStore");
 
   // plugin.js
-  var PLUGIN_VERSION = "1.2.3";
+  var PLUGIN_VERSION = "1.2.4";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
   var SWIPE_DIR_RATIO = 1.4;
@@ -3097,7 +3097,10 @@ ${report}
       };
     }
     out.swipeZones = outZones;
-    return out;
+    return (
+      /** @type {JdsSettings} */
+      out
+    );
   }
   __name(normalizeSettings, "normalizeSettings");
   function flickKeyframes(type, amp, dir) {
@@ -3309,6 +3312,16 @@ ${report}
     static {
       __name(this, "Plugin");
     }
+    // Both are unconditionally reassigned at the top of onLoad() before any
+    // listener/command/panel exists; declared as fields so checkJs doesn't
+    // infer `| undefined` for every later access.
+    /** @type {JdsSettings} */
+    _settings = normalizeSettings({});
+    /** @type {ReturnType<typeof createSettingsStore>} */
+    _settingsStore = (
+      /** @type {any} */
+      null
+    );
     onLoad() {
       pingInstall("journal-day-shortcuts");
       pingActive("journal-day-shortcuts");
@@ -3337,7 +3350,8 @@ ${report}
           return out;
         }, "readSynced")
       });
-      this._settings = this._settingsStore.load().settings;
+      this._settings = /** @type {JdsSettings} */
+      this._settingsStore.load().settings;
       this.ui.injectCSS(PANEL_CSS);
       this.ui.injectCSS(`
 			.${ROOT_CLASS}-panel .tps-key-row {
@@ -3493,7 +3507,8 @@ ${report}
       });
       this._detachSettingsLifecycle = this._settingsStore.attachLifecycle({
         onRemoteChange: /* @__PURE__ */ __name((settings) => {
-          this._settings = settings;
+          this._settings = /** @type {JdsSettings} */
+          settings;
           this._applySettings();
           this._renderSettings();
         }, "onRemoteChange")
@@ -3624,7 +3639,8 @@ ${report}
     }
     /** @param {Record<string, any>} patch */
     _updateSettings(patch) {
-      this._settings = this._settingsStore.update(patch).settings;
+      this._settings = /** @type {JdsSettings} */
+      this._settingsStore.update(patch).settings;
       this._applySettings();
       this._refreshScopePill();
     }
@@ -3659,7 +3675,8 @@ ${report}
           });
         }, "onPush"),
         onDiscard: /* @__PURE__ */ __name(() => {
-          this._settings = this._settingsStore.discardLocal();
+          this._settings = /** @type {JdsSettings} */
+          this._settingsStore.discardLocal();
           this._applySettings();
           this._renderSettings();
           try {
