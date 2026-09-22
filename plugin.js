@@ -1502,6 +1502,81 @@ var plugins = (() => {
   white-space: nowrap;
 }
 
+/* \u2500\u2500 Keyboard shortcut rows (keyRow) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+
+.tps-key-name { min-width: 0; }
+
+.tps-key-desc {
+  font-size: var(--tps-fs-hint);
+  color: var(--tps-text-muted);
+  white-space: normal;
+}
+
+.tps-key-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tps-space-1);
+}
+
+.tps-key-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 110px;
+  height: var(--tps-control-h-sm);
+  padding: 0 var(--tps-space-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+  font-size: var(--tps-fs-button);
+  color: var(--tps-text);
+  background: var(--tps-bg-input);
+  border: 1px solid var(--tps-divider);
+  border-radius: var(--tps-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--tps-dur-fast) var(--tps-ease-out),
+              background-color var(--tps-dur-fast) var(--tps-ease-out),
+              color var(--tps-dur-fast) var(--tps-ease-out);
+}
+
+.tps-key-chip:hover { border-color: var(--tps-border); }
+
+.tps-key-chip--unbound { color: var(--tps-text-faint); font-style: italic; }
+
+.tps-key-chip[data-capturing="true"] {
+  background: var(--tps-accent-soft);
+  border-color: var(--tps-accent);
+  color: var(--tps-accent);
+  outline: 2px solid var(--tps-accent);
+  outline-offset: 2px;
+}
+
+.tps-key-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tps-control-h-sm);
+  height: var(--tps-control-h-sm);
+  padding: 0;
+  font-size: var(--tps-fs-button);
+  line-height: 1;
+  color: var(--tps-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--tps-radius-sm);
+  cursor: pointer;
+}
+
+.tps-key-clear:hover {
+  color: var(--tps-text);
+  background: var(--tps-bg-hover);
+  border-color: var(--tps-divider);
+}
+
+.tps-key-chip:focus-visible,
+.tps-key-clear:focus-visible {
+  outline: 2px solid var(--tps-accent);
+  outline-offset: 2px;
+}
+
 /* \u2500\u2500 Tabs / segmented control \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 
 .tps-tabs {
@@ -2103,6 +2178,102 @@ ${report}
   }
   __name(openFeedbackDialog, "openFeedbackDialog");
 
+  // ../../shared/keybindings.js
+  var MOD_KEYS = /* @__PURE__ */ new Set(["Control", "Shift", "Alt", "Meta"]);
+  function keyFromCode(e) {
+    const code = String(e.code || "");
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+    if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+    return "";
+  }
+  __name(keyFromCode, "keyFromCode");
+  function keyFromKey(e) {
+    let key = String(e.key || "");
+    if (key === " ") return "Space";
+    if (key.length === 1) key = key.toUpperCase();
+    return key;
+  }
+  __name(keyFromKey, "keyFromKey");
+  function eventToCombo(e) {
+    if (MOD_KEYS.has(e.key)) return null;
+    const parts = [];
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    if (e.metaKey) parts.push("Meta");
+    const byKey = keyFromKey(e);
+    const byCode = keyFromCode(e);
+    const key = e.altKey && byCode && !/^[A-Z0-9]$/.test(byKey) ? byCode : byKey || byCode;
+    if (!key) return null;
+    parts.push(key);
+    return parts.join("+");
+  }
+  __name(eventToCombo, "eventToCombo");
+  function parseCombo(combo) {
+    const parts = String(combo || "").split("+").map((p) => p.trim()).filter(Boolean);
+    const out = { ctrl: false, alt: false, shift: false, meta: false, key: "" };
+    for (const p of parts) {
+      const lower = p.toLowerCase();
+      if (lower === "ctrl" || lower === "control") out.ctrl = true;
+      else if (lower === "alt" || lower === "option") out.alt = true;
+      else if (lower === "shift") out.shift = true;
+      else if (lower === "meta" || lower === "cmd" || lower === "command") out.meta = true;
+      else out.key = p;
+    }
+    if (out.key === " ") out.key = "Space";
+    if (out.key.length === 1) out.key = out.key.toUpperCase();
+    return out;
+  }
+  __name(parseCombo, "parseCombo");
+  function comboMatches(e, m) {
+    if (!m.key) return false;
+    if (!!e.ctrlKey !== m.ctrl) return false;
+    if (!!e.altKey !== m.alt) return false;
+    if (!!e.shiftKey !== m.shift) return false;
+    if (!!e.metaKey !== m.meta) return false;
+    return keyFromKey(e) === m.key || keyFromCode(e) !== "" && keyFromCode(e) === m.key;
+  }
+  __name(comboMatches, "comboMatches");
+  function isMacPlatform() {
+    try {
+      const p = String(navigator.platform || "") + " " + String(navigator.userAgent || "");
+      return /Mac|iPhone|iPad|iPod/i.test(p);
+    } catch {
+      return false;
+    }
+  }
+  __name(isMacPlatform, "isMacPlatform");
+  var MAC_GLYPHS = { ctrl: "\u2303", alt: "\u2325", shift: "\u21E7", meta: "\u2318" };
+  var KEY_GLYPHS = {
+    ArrowLeft: "\u2190",
+    ArrowRight: "\u2192",
+    ArrowUp: "\u2191",
+    ArrowDown: "\u2193",
+    Enter: "\u21A9",
+    Escape: "Esc",
+    Backspace: "\u232B",
+    Delete: "\u2326",
+    Tab: "\u21E5",
+    Space: "\u2423"
+  };
+  function formatCombo(combo, opts = {}) {
+    const m = parseCombo(combo);
+    if (!m.key) return opts.placeholder ?? "Unbound";
+    const mac = opts.mac ?? isMacPlatform();
+    const key = KEY_GLYPHS[m.key] || m.key;
+    if (mac) {
+      return (m.ctrl ? MAC_GLYPHS.ctrl : "") + (m.alt ? MAC_GLYPHS.alt : "") + (m.shift ? MAC_GLYPHS.shift : "") + (m.meta ? MAC_GLYPHS.meta : "") + key;
+    }
+    const parts = [];
+    if (m.ctrl) parts.push("Ctrl");
+    if (m.alt) parts.push("Alt");
+    if (m.shift) parts.push("Shift");
+    if (m.meta) parts.push("Win");
+    parts.push(key);
+    return parts.join("+");
+  }
+  __name(formatCombo, "formatCombo");
+
   // ../../shared/settings-ui/helpers.js
   var PANEL_CSS = tokens_default + "\n" + components_default + "\n" + color_field_default;
   function h(tag, props, ...children) {
@@ -2547,6 +2718,79 @@ ${report}
     return h("label", { class: "tps-opt" }, input, labelEl, descEl);
   }
   __name(optionRow, "optionRow");
+  function listRow({ icon, name, controls }) {
+    const ctrlChildren = controls == null ? [] : Array.isArray(controls) ? controls : [controls];
+    return h(
+      "div",
+      { class: "tps-list-row" },
+      h("div", null, icon || null),
+      h("div", { class: "tps-list-name" }, name),
+      h("div", null, ...ctrlChildren)
+    );
+  }
+  __name(listRow, "listRow");
+  function keyRow({ label, desc, combo, onChange, onClear, placeholder }) {
+    const show = /* @__PURE__ */ __name((c) => formatCombo(c, { placeholder }), "show");
+    const chip = h("button", { type: "button", class: "tps-key-chip", "aria-label": `${label} \u2014 click to rebind` }, show(combo));
+    chip.classList.toggle("tps-key-chip--unbound", !combo);
+    let capturing = false;
+    let onCaptureKey = null;
+    const stop = /* @__PURE__ */ __name((commit, next) => {
+      if (!capturing) return;
+      capturing = false;
+      chip.removeAttribute("data-capturing");
+      if (onCaptureKey) {
+        window.removeEventListener("keydown", onCaptureKey, true);
+        onCaptureKey = null;
+      }
+      if (commit) combo = next;
+      chip.textContent = show(combo);
+      chip.classList.toggle("tps-key-chip--unbound", !combo);
+    }, "stop");
+    chip.addEventListener("click", () => {
+      if (capturing) {
+        stop(false, combo);
+        return;
+      }
+      capturing = true;
+      chip.setAttribute("data-capturing", "true");
+      chip.textContent = "Press keys\u2026";
+      onCaptureKey = /* @__PURE__ */ __name((ev) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          stop(false, combo);
+          return;
+        }
+        const next = eventToCombo(ev);
+        if (!next) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        stop(true, next);
+        onChange(next);
+      }, "onCaptureKey");
+      window.addEventListener("keydown", onCaptureKey, true);
+    });
+    const controls = [chip];
+    if (onClear) {
+      controls.push(h("button", {
+        type: "button",
+        class: "tps-key-clear",
+        "aria-label": `${label} \u2014 remove shortcut`,
+        title: "Remove shortcut",
+        onClick: /* @__PURE__ */ __name(() => {
+          stop(false, "");
+          combo = "";
+          chip.textContent = show("");
+          chip.classList.add("tps-key-chip--unbound");
+          onClear();
+        }, "onClick")
+      }, "\xD7"));
+    }
+    const name = desc ? h("div", { class: "tps-key-name" }, h("div", null, label), h("div", { class: "tps-key-desc" }, desc)) : label;
+    return listRow({ icon: null, name, controls: h("div", { class: "tps-key-controls" }, ...controls) });
+  }
+  __name(keyRow, "keyRow");
   function button({ label, variant = "ghost", size = "sm", onClick, disabled }) {
     const cls = ["tps-button", `tps-button--${variant}`];
     if (size === "md") cls.push("tps-button--md");
@@ -2558,6 +2802,14 @@ ${report}
     }, label);
   }
   __name(button, "button");
+
+  // ../../shared/editor-dom.js
+  var FOCUSED_PANEL_SEL = ".panel.focused-panel, .panel.has-focus";
+  function focusedPanelEl(doc = document) {
+    const el2 = doc.querySelector(FOCUSED_PANEL_SEL);
+    return el2 instanceof HTMLElement ? el2 : null;
+  }
+  __name(focusedPanelEl, "focusedPanelEl");
 
   // ../../shared/plugin-version.js
   var CONFIG_WRITE_QUEUES_KEY = "__tpsPluginConfigWriteQueues";
@@ -2707,7 +2959,11 @@ ${report}
     }
     if (conf.ver === void 0 && conf.custom === void 0) return;
     const hasStubName = typeof conf.name !== "string" || !conf.name.trim() || STUB_NAMES.includes(conf.name.trim());
-    const missingRepo = identity.sourceRepo && conf.__source_repo === void 0;
+    const staleRepo = !!identity.sourceRepo && Array.isArray(identity.legacySourceRepos) && identity.legacySourceRepos.includes(
+      /** @type {string} */
+      conf.__source_repo
+    );
+    const missingRepo = !!identity.sourceRepo && (conf.__source_repo === void 0 || staleRepo);
     if (!hasStubName && !missingRepo) return;
     try {
       let ws = "default";
@@ -3399,7 +3655,7 @@ ${report}
   __name(createSettingsStore, "createSettingsStore");
 
   // plugin.js
-  var PLUGIN_VERSION = "1.2.8";
+  var PLUGIN_VERSION = "1.3.0";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
   var SWIPE_DIR_RATIO = 1.4;
@@ -3418,6 +3674,10 @@ ${report}
     // single wheel-event |deltaX| that fires a page change
     swipeBurstEndMs: 20,
     // silence required to release the gesture lock
+    swipeTouchEnabled: true,
+    // touchscreen swipe (mobile / PWA)
+    swipeTouchThreshold: 60,
+    // px of horizontal travel that fires a page change
     swipeShake: true,
     // master toggle for the post-commit feedback animation
     swipeZones: {
@@ -3459,6 +3719,8 @@ ${report}
       swipeInverted: typeof src.swipeInverted === "boolean" ? src.swipeInverted : DEFAULTS.swipeInverted,
       swipeSpikeDelta: numOr(src.swipeSpikeDelta, DEFAULTS.swipeSpikeDelta),
       swipeBurstEndMs: numOr(src.swipeBurstEndMs, DEFAULTS.swipeBurstEndMs),
+      swipeTouchEnabled: typeof src.swipeTouchEnabled === "boolean" ? src.swipeTouchEnabled : DEFAULTS.swipeTouchEnabled,
+      swipeTouchThreshold: numOr(src.swipeTouchThreshold, DEFAULTS.swipeTouchThreshold),
       swipeShake: typeof src.swipeShake === "boolean" ? src.swipeShake : DEFAULTS.swipeShake
     };
     const zones = (
@@ -3578,45 +3840,6 @@ ${report}
     }
   }
   __name(flickKeyframes, "flickKeyframes");
-  var MOD_KEYS = /* @__PURE__ */ new Set(["Control", "Shift", "Alt", "Meta"]);
-  function eventToCombo(e) {
-    if (MOD_KEYS.has(e.key)) return null;
-    const parts = [];
-    if (e.ctrlKey) parts.push("Ctrl");
-    if (e.altKey) parts.push("Alt");
-    if (e.shiftKey) parts.push("Shift");
-    if (e.metaKey) parts.push("Meta");
-    let key = e.key;
-    if (key.length === 1) key = key.toUpperCase();
-    parts.push(key);
-    return parts.join("+");
-  }
-  __name(eventToCombo, "eventToCombo");
-  function parseCombo(combo) {
-    const parts = String(combo || "").split("+").map((p) => p.trim()).filter(Boolean);
-    const out = { ctrl: false, alt: false, shift: false, meta: false, key: "" };
-    for (const p of parts) {
-      const lower = p.toLowerCase();
-      if (lower === "ctrl" || lower === "control") out.ctrl = true;
-      else if (lower === "alt" || lower === "option") out.alt = true;
-      else if (lower === "shift") out.shift = true;
-      else if (lower === "meta" || lower === "cmd" || lower === "command") out.meta = true;
-      else out.key = p;
-    }
-    if (out.key.length === 1) out.key = out.key.toUpperCase();
-    return out;
-  }
-  __name(parseCombo, "parseCombo");
-  function comboMatches(e, m) {
-    if (!m.key) return false;
-    if (e.ctrlKey !== m.ctrl) return false;
-    if (e.altKey !== m.alt) return false;
-    if (e.shiftKey !== m.shift) return false;
-    if (e.metaKey !== m.meta) return false;
-    const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-    return key === m.key;
-  }
-  __name(comboMatches, "comboMatches");
   function isEditableTarget(target) {
     if (!(target instanceof Element)) return false;
     const tag = target.tagName;
@@ -3733,6 +3956,10 @@ ${report}
       this._wheelHandler = null;
       this._locked = false;
       this._lockTimer = null;
+      this._touchStartHandler = null;
+      this._touchMoveHandler = null;
+      this._touchEndHandler = null;
+      this._touch = null;
       this._detachSettingsLifecycle = null;
       this._settingsStore = createSettingsStore(this, {
         slug: "journal-day-shortcuts",
@@ -3763,32 +3990,6 @@ ${report}
 			.${ROOT_CLASS}-panel .tps-key-row-label {
 				font-size: var(--tps-fs-label);
 				color: var(--tps-text);
-			}
-			.${ROOT_CLASS}-panel .tps-key-chip {
-				display: inline-flex;
-				align-items: center;
-				justify-content: center;
-				min-width: 110px;
-				height: var(--tps-control-h-sm);
-				padding: 0 var(--tps-space-3);
-				font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
-				font-size: var(--tps-fs-button);
-				color: var(--tps-text);
-				background: var(--tps-bg-input);
-				border: 1px solid var(--tps-divider);
-				border-radius: var(--tps-radius-sm);
-				cursor: pointer;
-				transition: border-color var(--tps-dur-fast) var(--tps-ease-out),
-				            background-color var(--tps-dur-fast) var(--tps-ease-out),
-				            color var(--tps-dur-fast) var(--tps-ease-out);
-			}
-			.${ROOT_CLASS}-panel .tps-key-chip:hover { border-color: var(--tps-border); }
-			.${ROOT_CLASS}-panel .tps-key-chip[data-capturing="true"] {
-				background: var(--tps-accent-soft);
-				border-color: var(--tps-accent);
-				color: var(--tps-accent);
-				outline: 2px solid var(--tps-accent);
-				outline-offset: 2px;
 			}
 			.${ROOT_CLASS}-panel .tps-footer {
 				display: flex;
@@ -3931,12 +4132,14 @@ ${report}
       });
       this._installKeyListener();
       this._installSwipeListener();
+      this._installTouchListener();
     }
     onUnload() {
       this._cancelPillSettle?.();
       this._cancelPillSettle = null;
       this._removeKeyListener();
       this._removeSwipeListener();
+      this._removeTouchListener();
       try {
         this._detachSettingsLifecycle?.();
       } catch {
@@ -3960,23 +4163,65 @@ ${report}
       this._panelEl = null;
     }
     // ── navigation ─────────────────────────────────────────────────────
-    /** @param {number} delta */
-    _step(delta) {
+    // Is this panel a journal? Canonical marker is the prev/next-day view-buttons
+    // (data-action "plugin.journal_previous_day" / "plugin.journal_next_day") —
+    // name-INDEPENDENT, and the exact buttons _step() clicks, so a passing test
+    // guarantees navigation will work. `.panel-bar[data-plugin="Journal"]` is kept
+    // only as a legacy fallback: that attribute reflects the collection's display
+    // NAME, which varies per workspace (a journal renamed "Calendar" carries
+    // data-plugin="Calendar").
+    /** @param {Element | null} [pane] */
+    _isJournalPane(pane) {
+      if (!pane) return false;
+      if (pane.querySelector('button[data-action^="plugin.journal_"]')) return true;
+      return !!pane.querySelector('.panel-bar[data-plugin="Journal"]');
+    }
+    /**
+     * Resolve WHICH journal panel to act on. With several panels open this is the
+     * whole ballgame — guessing here is what made the shortcut move the leftmost
+     * journal instead of the one the user was in.
+     *
+     *   1. An explicit pane — swipe already knows the panel under the cursor.
+     *   2. The focused panel. Thymer's editor is not contenteditable; keystrokes
+     *      go to a class-less sink div under div.app, so e.target.closest('.panel')
+     *      is null while editing. `.panel.focused-panel` / `.has-focus` is the
+     *      reliable signal (shared/editor-dom.js, as used by jump-move-send).
+     *   3. getActivePanel(), climbed to the panel ROOT — its getElement() returns
+     *      .editor-panel, which sits inside .panel-body and therefore EXCLUDES the
+     *      menubar where these buttons live. It can also be null mid-render, hence
+     *      the layers above.
+     *   4. Exactly one visible journal panel is unambiguous, so use it — this keeps
+     *      the shortcut working from the sidebar or the settings panel. Two or more
+     *      with none focused is genuinely ambiguous: refuse rather than guess.
+     *
+     * @param {HTMLElement | null} [pane]
+     * @returns {HTMLElement | null}
+     */
+    _targetJournalPane(pane) {
+      if (this._isJournalPane(pane)) return pane ?? null;
+      const focused = focusedPanelEl();
+      if (this._isJournalPane(focused)) return focused;
+      const active = (
+        /** @type {HTMLElement | null} */
+        this.ui.getActivePanel()?.getElement?.()?.closest(".panel") ?? null
+      );
+      if (this._isJournalPane(active)) return active;
+      const journals = Array.from(document.querySelectorAll(".panel")).filter(
+        (p) => this._isJournalPane(p) && p.getBoundingClientRect().width > 0
+      );
+      return journals.length === 1 ? (
+        /** @type {HTMLElement} */
+        journals[0]
+      ) : null;
+    }
+    /** @param {number} delta @param {HTMLElement | null} [pane] */
+    _step(delta, pane) {
       const action = delta < 0 ? "plugin.journal_previous_day" : "plugin.journal_next_day";
-      const panelApi = this.ui.getActivePanel();
-      const panelEl = panelApi?.getElement?.();
-      let btn = null;
-      if (panelEl) {
-        btn = panelEl.querySelector(`button[data-action="${action}"]`);
-      }
-      if (!btn) {
-        const candidates = Array.from(document.querySelectorAll(`button[data-action="${action}"]`));
-        btn = /** @type {HTMLButtonElement | null} */
-        candidates.find((el2) => {
-          const rect = el2.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        }) ?? null;
-      }
+      const target = this._targetJournalPane(pane);
+      const btn = (
+        /** @type {HTMLButtonElement | null} */
+        target?.querySelector(`button[data-action="${action}"]`) ?? null
+      );
       if (!btn) {
         try {
           this.ui.addToaster({
@@ -4035,6 +4280,8 @@ ${report}
       this._installKeyListener();
       this._removeSwipeListener();
       this._installSwipeListener();
+      this._removeTouchListener();
+      this._installTouchListener();
     }
     /** @param {Record<string, any>} patch */
     _updateSettings(patch) {
@@ -4130,20 +4377,95 @@ ${report}
       window.removeEventListener("wheel", this._wheelHandler, { capture: true });
       this._wheelHandler = null;
     }
+    // ── touch swipe (mobile / PWA) ─────────────────────────────────────
+    //
+    // A touch gesture is discrete (touchstart → moves → touchend), unlike the
+    // wheel's inertia stream, so it needs no silence lockout: one commit per
+    // gesture, gated by `committed`.
+    //
+    // The hard part on a phone is not stealing vertical scroll. We classify the
+    // gesture ONCE, on the first movement past CLASSIFY_PX, using the same
+    // horizontal-dominance ratio the trackpad path uses. If it lands 'v' the
+    // gesture is abandoned for good and scrolling proceeds untouched; only a
+    // gesture classified 'h' calls preventDefault, and only from then on.
+    //
+    // touchstart is passive (it only records state). touchmove MUST be
+    // passive:false to be able to preventDefault, but it early-outs on the very
+    // first line for any touch that didn't begin inside a journal panel, so the
+    // cost on ordinary scrolls is a null check.
+    _installTouchListener() {
+      if (this._disabled || !this._settings.swipeTouchEnabled || this._touchStartHandler) return;
+      this._touchStartHandler = (e) => this._onTouchStart(e);
+      this._touchMoveHandler = (e) => this._onTouchMove(e);
+      this._touchEndHandler = () => {
+        this._touch = null;
+      };
+      window.addEventListener("touchstart", this._touchStartHandler, { capture: true, passive: true });
+      window.addEventListener("touchmove", this._touchMoveHandler, { capture: true, passive: false });
+      window.addEventListener("touchend", this._touchEndHandler, { capture: true, passive: true });
+      window.addEventListener("touchcancel", this._touchEndHandler, { capture: true, passive: true });
+    }
+    _removeTouchListener() {
+      this._touch = null;
+      if (this._touchStartHandler) {
+        window.removeEventListener("touchstart", this._touchStartHandler, { capture: true });
+        this._touchStartHandler = null;
+      }
+      if (this._touchMoveHandler) {
+        window.removeEventListener("touchmove", this._touchMoveHandler, { capture: true });
+        this._touchMoveHandler = null;
+      }
+      if (this._touchEndHandler) {
+        window.removeEventListener("touchend", this._touchEndHandler, { capture: true });
+        window.removeEventListener("touchcancel", this._touchEndHandler, { capture: true });
+        this._touchEndHandler = null;
+      }
+    }
+    /** @param {TouchEvent} e */
+    _onTouchStart(e) {
+      this._touch = null;
+      if (!this._settings.swipeTouchEnabled) return;
+      if (!e.touches || e.touches.length !== 1) return;
+      const pane = this._journalPanelUnder(e);
+      if (!pane) return;
+      const t = e.touches[0];
+      this._touch = { x: t.clientX, y: t.clientY, pane, axis: "none", committed: false };
+    }
+    /** @param {TouchEvent} e */
+    _onTouchMove(e) {
+      const st = this._touch;
+      if (!st) return;
+      if (!e.touches || e.touches.length !== 1) {
+        this._touch = null;
+        return;
+      }
+      if (st.axis === "v") return;
+      const t = e.touches[0];
+      const dx = t.clientX - st.x;
+      const dy = t.clientY - st.y;
+      if (st.axis === "none") {
+        const CLASSIFY_PX = 10;
+        if (Math.abs(dx) < CLASSIFY_PX && Math.abs(dy) < CLASSIFY_PX) return;
+        st.axis = Math.abs(dx) >= Math.abs(dy) * SWIPE_DIR_RATIO ? "h" : "v";
+        if (st.axis === "v") return;
+      }
+      e.preventDefault();
+      if (st.committed) return;
+      const threshold = Math.abs(numOr(this._settings.swipeTouchThreshold, DEFAULTS.swipeTouchThreshold));
+      if (Math.abs(dx) < threshold) return;
+      const travel = this._settings.swipeInverted ? -dx : dx;
+      const dir = travel > 0 ? -1 : 1;
+      st.committed = true;
+      this._step(dir, st.pane);
+      if (this._settings.swipeShake) this._playFlickAnim(st.pane, dir);
+    }
     // Cursor-driven journal-panel detection: walks up from the wheel event's
     // own target (the element directly under the cursor when the wheel
     // fired) and returns the enclosing `.panel`, but only if that panel is
     // a journal. Hovering over any other panel — or over chrome outside any
-    // panel — returns null, so swipe never fires there.
-    //
-    // Journal marker: the prev/next-day view-buttons (data-action
-    // "plugin.journal_previous_day" / "plugin.journal_next_day"). This is the
-    // canonical, name-INDEPENDENT signal — and the exact buttons _step()
-    // clicks, so a passing gate guarantees navigation will work. We do NOT
-    // key off `.panel-bar[data-plugin="Journal"]`: that attribute reflects the
-    // collection's display NAME, which varies per workspace (e.g. a journal
-    // renamed "Calendar" carries data-plugin="Calendar"), silently disabling
-    // swipe. The legacy attribute marker is kept only as a fallback.
+    // panel — returns null, so swipe never fires there. The journal test itself
+    // lives in _isJournalPane(); see its comment for why the data-action marker
+    // is canonical and data-plugin="Journal" is only a fallback.
     /** @param {Event | null} e */
     _journalPanelUnder(e) {
       const t = (
@@ -4155,10 +4477,7 @@ ${report}
         /** @type {HTMLElement|null} */
         t.closest(".panel")
       );
-      if (!pane) return null;
-      if (pane.querySelector('button[data-action^="plugin.journal_"]')) return pane;
-      if (pane.querySelector('.panel-bar[data-plugin="Journal"]')) return pane;
-      return null;
+      return this._isJournalPane(pane) ? pane : null;
     }
     /** @param {WheelEvent} e */
     _onWheel(e) {
@@ -4184,7 +4503,7 @@ ${report}
       const dir = dx > 0 ? 1 : -1;
       this._locked = true;
       this._armUnlock(burstEndMs);
-      this._step(dir);
+      this._step(dir, pane);
       if (this._settings.swipeShake) this._playFlickAnim(pane, dir);
     }
     /** @param {number} quietMs */
@@ -4237,57 +4556,11 @@ ${report}
       if (!this._panelEl) return;
       const s = this._settings;
       const conf = typeof this.getConfiguration === "function" ? this.getConfiguration() || {} : {};
-      const keyRow = /* @__PURE__ */ __name((which, labelText) => {
-        const row = document.createElement("div");
-        row.className = "tps-key-row";
-        const label = document.createElement("div");
-        label.className = "tps-key-row-label";
-        label.textContent = labelText;
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "tps-key-chip";
-        chip.textContent = s[which];
-        chip.setAttribute("aria-label", `${labelText} \u2014 click to rebind`);
-        let capturing = false;
-        let onCaptureKey = null;
-        const stopCapturing = /* @__PURE__ */ __name((commit) => {
-          if (!capturing) return;
-          capturing = false;
-          chip.removeAttribute("data-capturing");
-          if (onCaptureKey) {
-            window.removeEventListener("keydown", onCaptureKey, true);
-            onCaptureKey = null;
-          }
-          if (!commit) chip.textContent = this._settings[which];
-        }, "stopCapturing");
-        chip.addEventListener("click", () => {
-          if (capturing) {
-            stopCapturing(false);
-            return;
-          }
-          capturing = true;
-          chip.setAttribute("data-capturing", "true");
-          chip.textContent = "Press a key\u2026";
-          onCaptureKey = /* @__PURE__ */ __name((ev) => {
-            if (ev.key === "Escape") {
-              ev.preventDefault();
-              ev.stopPropagation();
-              stopCapturing(false);
-              return;
-            }
-            const combo = eventToCombo(ev);
-            if (!combo) return;
-            ev.preventDefault();
-            ev.stopPropagation();
-            chip.textContent = combo;
-            stopCapturing(true);
-            this._updateSettings({ [which]: combo });
-          }, "onCaptureKey");
-          window.addEventListener("keydown", onCaptureKey, true);
-        });
-        row.append(label, chip);
-        return row;
-      }, "keyRow");
+      const shortcutRow = /* @__PURE__ */ __name((which, labelText) => keyRow({
+        label: labelText,
+        combo: s[which],
+        onChange: /* @__PURE__ */ __name((combo) => this._updateSettings({ [which]: combo }), "onChange")
+      }), "shortcutRow");
       const enabledOpt = optionRow({
         type: "checkbox",
         name: "enabled",
@@ -4318,6 +4591,17 @@ ${report}
         checked: s.swipeInverted,
         onChange: /* @__PURE__ */ __name((e) => {
           this._updateSettings({ swipeInverted: !!/** @type {HTMLInputElement} */
+          e.target.checked });
+        }, "onChange")
+      });
+      const swipeTouchEnabledOpt = optionRow({
+        type: "checkbox",
+        name: "swipeTouchEnabled",
+        label: "Enable touch swipe",
+        desc: "Swipe a journal page left/right with one finger to change day \u2014 for phones, tablets, and the installed PWA. Vertical scrolling and pinch-zoom are unaffected.",
+        checked: s.swipeTouchEnabled,
+        onChange: /* @__PURE__ */ __name((e) => {
+          this._updateSettings({ swipeTouchEnabled: !!/** @type {HTMLInputElement} */
           e.target.checked });
         }, "onChange")
       });
@@ -4464,6 +4748,7 @@ ${report}
       const zoneRows = ZONES.map(zoneRow);
       const swipeSpikeRow = numberRow("swipeSpikeDelta", "Flick sensitivity", "px", "Single wheel-event horizontal magnitude that triggers a page change. Lower = easier to trigger.");
       const swipeBurstEndRow = numberRow("swipeBurstEndMs", "Burst-end gap (silence)", "ms", "How long the trackpad must be silent after a commit before the next flick can fire. Lower = snappier rapid-fire, but easier for inertia to double-trigger.");
+      const swipeTouchRow = numberRow("swipeTouchThreshold", "Swipe distance", "px", "How far a finger must travel horizontally before the day changes. Lower = easier to trigger, but easier to fire by accident while scrolling.");
       const footer = document.createElement("div");
       footer.className = "tps-footer";
       const resetBtn = button({
@@ -4508,8 +4793,8 @@ ${report}
           label: "Shortcuts",
           hint: "Click a binding and press the desired key combination. Press Escape to cancel.",
           body: [
-            keyRow("prev", "Previous day"),
-            keyRow("next", "Next day")
+            shortcutRow("prev", "Previous day"),
+            shortcutRow("next", "Next day")
           ]
         }),
         section({
@@ -4524,6 +4809,14 @@ ${report}
             swipeInvertedOpt,
             swipeSpikeRow,
             swipeBurstEndRow
+          ]
+        }),
+        section({
+          label: "Touch swipe (mobile / PWA)",
+          hint: "One-finger horizontal swipe on a journal page changes the day. The gesture is classified once, on the first movement \u2014 anything that reads as vertical is left alone, so scrolling never gets hijacked. Direction follows the Invert toggle above.",
+          body: [
+            swipeTouchEnabledOpt,
+            swipeTouchRow
           ]
         }),
         section({
