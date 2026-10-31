@@ -2810,6 +2810,10 @@ ${report}
     return el2 instanceof HTMLElement ? el2 : null;
   }
   __name(focusedPanelEl, "focusedPanelEl");
+  function isKeyboardEditing(doc = document) {
+    return doc.documentElement.classList.contains("is-keyboard-editing");
+  }
+  __name(isKeyboardEditing, "isKeyboardEditing");
 
   // ../../shared/plugin-version.js
   var CONFIG_WRITE_QUEUES_KEY = "__tpsPluginConfigWriteQueues";
@@ -3655,7 +3659,7 @@ ${report}
   __name(createSettingsStore, "createSettingsStore");
 
   // plugin.js
-  var PLUGIN_VERSION = "1.4.0";
+  var PLUGIN_VERSION = "1.4.1";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
   var SWIPE_DIR_RATIO = 1.4;
@@ -4481,10 +4485,19 @@ ${report}
         this._touchEndHandler = null;
       }
     }
+    /** True while text is being edited: Thymer's editor is active, a text field has focus, or the visible screen has shrunk for the keyboard. */
+    _keyboardUp() {
+      if (isKeyboardEditing()) return true;
+      const a = document.activeElement;
+      if (a instanceof HTMLElement && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return true;
+      const vv = window.visualViewport;
+      return !!vv && window.innerHeight - vv.height > 120;
+    }
     /** @param {TouchEvent} e */
     _onTouchStart(e) {
       this._touch = null;
       if (!this._mobile.swipeTouchEnabled) return;
+      if (this._keyboardUp()) return;
       if (!e.touches || e.touches.length !== 1) return;
       const pane = this._journalPanelUnder(e);
       if (!pane) return;
