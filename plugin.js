@@ -3655,10 +3655,13 @@ ${report}
   __name(createSettingsStore, "createSettingsStore");
 
   // plugin.js
-  var PLUGIN_VERSION = "1.3.0";
+  var PLUGIN_VERSION = "1.3.1";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
   var SWIPE_DIR_RATIO = 1.4;
+  var TOUCH_COMMIT_RATIO = 3;
+  var TOUCH_MAX_MS = 600;
+  var LEGACY_TOUCH_THRESHOLD = 60;
   function numOr(value, fallback) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
@@ -3676,7 +3679,7 @@ ${report}
     // silence required to release the gesture lock
     swipeTouchEnabled: true,
     // touchscreen swipe (mobile / PWA)
-    swipeTouchThreshold: 60,
+    swipeTouchThreshold: 160,
     // px of horizontal travel that fires a page change
     swipeShake: true,
     // master toggle for the post-commit feedback animation
@@ -3711,6 +3714,7 @@ ${report}
       /** @type {Record<string, any>} */
       raw && typeof raw === "object" ? raw : {}
     );
+    const touchThreshold = numOr(src.swipeTouchThreshold, DEFAULTS.swipeTouchThreshold);
     const out = {
       enabled: typeof src.enabled === "boolean" ? src.enabled : DEFAULTS.enabled,
       prev: typeof src.prev === "string" && src.prev.trim() ? src.prev : DEFAULTS.prev,
@@ -3720,7 +3724,7 @@ ${report}
       swipeSpikeDelta: numOr(src.swipeSpikeDelta, DEFAULTS.swipeSpikeDelta),
       swipeBurstEndMs: numOr(src.swipeBurstEndMs, DEFAULTS.swipeBurstEndMs),
       swipeTouchEnabled: typeof src.swipeTouchEnabled === "boolean" ? src.swipeTouchEnabled : DEFAULTS.swipeTouchEnabled,
-      swipeTouchThreshold: numOr(src.swipeTouchThreshold, DEFAULTS.swipeTouchThreshold),
+      swipeTouchThreshold: touchThreshold === LEGACY_TOUCH_THRESHOLD ? DEFAULTS.swipeTouchThreshold : touchThreshold,
       swipeShake: typeof src.swipeShake === "boolean" ? src.swipeShake : DEFAULTS.swipeShake
     };
     const zones = (
@@ -4389,6 +4393,12 @@ ${report}
     // gesture is abandoned for good and scrolling proceeds untouched; only a
     // gesture classified 'h' calls preventDefault, and only from then on.
     //
+    // Firing is stricter than owning the gesture: the swipe must reach
+    // swipeTouchThreshold, be nearly straight (TOUCH_COMMIT_RATIO) and be quick
+    // (TOUCH_MAX_MS from touchstart). A slow gesture is abandoned before it is
+    // classified, so a long-press drag (text selection, reordering) is never
+    // touched.
+    //
     // touchstart is passive (it only records state). touchmove MUST be
     // passive:false to be able to preventDefault, but it early-outs on the very
     // first line for any touch that didn't begin inside a journal panel, so the
@@ -4429,7 +4439,7 @@ ${report}
       const pane = this._journalPanelUnder(e);
       if (!pane) return;
       const t = e.touches[0];
-      this._touch = { x: t.clientX, y: t.clientY, pane, axis: "none", committed: false };
+      this._touch = { x: t.clientX, y: t.clientY, t0: e.timeStamp, pane, axis: "none", committed: false };
     }
     /** @param {TouchEvent} e */
     _onTouchMove(e) {
@@ -4440,6 +4450,10 @@ ${report}
         return;
       }
       if (st.axis === "v") return;
+      if (!st.committed && e.timeStamp - st.t0 > TOUCH_MAX_MS) {
+        this._touch = null;
+        return;
+      }
       const t = e.touches[0];
       const dx = t.clientX - st.x;
       const dy = t.clientY - st.y;
@@ -4453,6 +4467,7 @@ ${report}
       if (st.committed) return;
       const threshold = Math.abs(numOr(this._settings.swipeTouchThreshold, DEFAULTS.swipeTouchThreshold));
       if (Math.abs(dx) < threshold) return;
+      if (Math.abs(dx) < Math.abs(dy) * TOUCH_COMMIT_RATIO) return;
       const travel = this._settings.swipeInverted ? -dx : dx;
       const dir = travel > 0 ? -1 : 1;
       st.committed = true;
@@ -4748,7 +4763,7 @@ ${report}
       const zoneRows = ZONES.map(zoneRow);
       const swipeSpikeRow = numberRow("swipeSpikeDelta", "Flick sensitivity", "px", "Single wheel-event horizontal magnitude that triggers a page change. Lower = easier to trigger.");
       const swipeBurstEndRow = numberRow("swipeBurstEndMs", "Burst-end gap (silence)", "ms", "How long the trackpad must be silent after a commit before the next flick can fire. Lower = snappier rapid-fire, but easier for inertia to double-trigger.");
-      const swipeTouchRow = numberRow("swipeTouchThreshold", "Swipe distance", "px", "How far a finger must travel horizontally before the day changes. Lower = easier to trigger, but easier to fire by accident while scrolling.");
+      const swipeTouchRow = numberRow("swipeTouchThreshold", "Swipe distance", "px", "How far a finger must sweep sideways, in one quick, mostly straight motion, before the day changes. Lower = easier to trigger, but easier to fire by accident.");
       const footer = document.createElement("div");
       footer.className = "tps-footer";
       const resetBtn = button({
