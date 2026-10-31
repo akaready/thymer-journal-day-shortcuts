@@ -3655,18 +3655,23 @@ ${report}
   __name(createSettingsStore, "createSettingsStore");
 
   // plugin.js
-  var PLUGIN_VERSION = "1.3.1";
+  var PLUGIN_VERSION = "1.4.0";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
   var SWIPE_DIR_RATIO = 1.4;
   var TOUCH_COMMIT_RATIO = 3;
   var TOUCH_MAX_MS = 600;
-  var LEGACY_TOUCH_THRESHOLD = 60;
   function numOr(value, fallback) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
   }
   __name(numOr, "numOr");
+  var MOBILE_DEFAULTS = Object.freeze({
+    swipeTouchEnabled: true,
+    // touchscreen swipe (mobile / PWA)
+    swipeTouchThreshold: 160
+    // px of horizontal travel that fires a page change
+  });
   var DEFAULTS = Object.freeze({
     enabled: true,
     prev: "Ctrl+[",
@@ -3677,10 +3682,6 @@ ${report}
     // single wheel-event |deltaX| that fires a page change
     swipeBurstEndMs: 20,
     // silence required to release the gesture lock
-    swipeTouchEnabled: true,
-    // touchscreen swipe (mobile / PWA)
-    swipeTouchThreshold: 160,
-    // px of horizontal travel that fires a page change
     swipeShake: true,
     // master toggle for the post-commit feedback animation
     swipeZones: {
@@ -3709,12 +3710,22 @@ ${report}
     "nudge",
     "rubberband"
   ]);
+  function normalizeMobile(raw) {
+    const src = (
+      /** @type {Record<string, any>} */
+      raw && typeof raw === "object" ? raw : {}
+    );
+    return {
+      swipeTouchEnabled: typeof src.swipeTouchEnabled === "boolean" ? src.swipeTouchEnabled : MOBILE_DEFAULTS.swipeTouchEnabled,
+      swipeTouchThreshold: numOr(src.swipeTouchThreshold, MOBILE_DEFAULTS.swipeTouchThreshold)
+    };
+  }
+  __name(normalizeMobile, "normalizeMobile");
   function normalizeSettings(raw) {
     const src = (
       /** @type {Record<string, any>} */
       raw && typeof raw === "object" ? raw : {}
     );
-    const touchThreshold = numOr(src.swipeTouchThreshold, DEFAULTS.swipeTouchThreshold);
     const out = {
       enabled: typeof src.enabled === "boolean" ? src.enabled : DEFAULTS.enabled,
       prev: typeof src.prev === "string" && src.prev.trim() ? src.prev : DEFAULTS.prev,
@@ -3723,8 +3734,6 @@ ${report}
       swipeInverted: typeof src.swipeInverted === "boolean" ? src.swipeInverted : DEFAULTS.swipeInverted,
       swipeSpikeDelta: numOr(src.swipeSpikeDelta, DEFAULTS.swipeSpikeDelta),
       swipeBurstEndMs: numOr(src.swipeBurstEndMs, DEFAULTS.swipeBurstEndMs),
-      swipeTouchEnabled: typeof src.swipeTouchEnabled === "boolean" ? src.swipeTouchEnabled : DEFAULTS.swipeTouchEnabled,
-      swipeTouchThreshold: touchThreshold === LEGACY_TOUCH_THRESHOLD ? DEFAULTS.swipeTouchThreshold : touchThreshold,
       swipeShake: typeof src.swipeShake === "boolean" ? src.swipeShake : DEFAULTS.swipeShake
     };
     const zones = (
@@ -3931,6 +3940,11 @@ ${report}
     // infer `| undefined` for every later access.
     /** @type {JdsSettings} */
     _settings = normalizeSettings({});
+    _mobile = normalizeMobile({});
+    _mobileStore = (
+      /** @type {any} */
+      null
+    );
     /** @type {ReturnType<typeof createSettingsStore>} */
     _settingsStore = (
       /** @type {any} */
@@ -3979,6 +3993,14 @@ ${report}
       });
       this._settings = /** @type {JdsSettings} */
       this._settingsStore.load().settings;
+      this._mobileStore = createSettingsStore(this, {
+        slug: "journal-day-shortcuts-mobile",
+        key: "mobile",
+        version: PLUGIN_VERSION,
+        normalize: normalizeMobile
+      });
+      this._mobile = /** @type {JdsMobileSettings} */
+      this._mobileStore.load().settings;
       this.ui.injectCSS(PANEL_CSS);
       this.ui.injectCSS(`
 			.${ROOT_CLASS}-panel .tps-key-row {
@@ -4106,7 +4128,7 @@ ${report}
         this._panelEl = root;
         this._renderSettings();
       });
-      this._detachSettingsLifecycle = this._settingsStore.attachLifecycle({
+      const detachMain = this._settingsStore.attachLifecycle({
         onRemoteChange: /* @__PURE__ */ __name((settings) => {
           this._settings = /** @type {JdsSettings} */
           settings;
@@ -4114,6 +4136,18 @@ ${report}
           this._renderSettings();
         }, "onRemoteChange")
       });
+      const detachMobile = this._mobileStore.attachLifecycle({
+        onRemoteChange: /* @__PURE__ */ __name((settings) => {
+          this._mobile = /** @type {JdsMobileSettings} */
+          settings;
+          this._applySettings();
+          this._renderSettings();
+        }, "onRemoteChange")
+      });
+      this._detachSettingsLifecycle = () => {
+        detachMain();
+        detachMobile();
+      };
       try {
         const staleRoot = document.querySelector(".plg-journal-day-shortcuts-panel");
         if (staleRoot && staleRoot.parentElement) {
@@ -4294,6 +4328,22 @@ ${report}
       this._applySettings();
       this._refreshScopePill();
     }
+    /** @param {Partial<JdsMobileSettings>} patch */
+    _updateMobile(patch) {
+      this._mobile = /** @type {JdsMobileSettings} */
+      this._mobileStore.update(patch).settings;
+      this._applySettings();
+    }
+    /** Write the mobile profile to every device's slot; the phone follows it from then on. */
+    _sendToPhone() {
+      void this._mobileStore.pushToAll().then((ok) => {
+        const message = ok ? "Mobile settings sent to your devices" : "Could not send \u2014 the plugin config could not be written. Try again.";
+        try {
+          this.ui.addToaster({ title: "Journal Day Shortcuts", message, dismissible: true, autoDestroyTime: ok ? 3e3 : 6e3 });
+        } catch {
+        }
+      });
+    }
     /**
      * Zone edits patch the FULL swipeZones object — the store's update()
      * merges shallowly at the top level, so a nested zone change must carry
@@ -4404,7 +4454,7 @@ ${report}
     // first line for any touch that didn't begin inside a journal panel, so the
     // cost on ordinary scrolls is a null check.
     _installTouchListener() {
-      if (this._disabled || !this._settings.swipeTouchEnabled || this._touchStartHandler) return;
+      if (this._disabled || !this._mobile.swipeTouchEnabled || this._touchStartHandler) return;
       this._touchStartHandler = (e) => this._onTouchStart(e);
       this._touchMoveHandler = (e) => this._onTouchMove(e);
       this._touchEndHandler = () => {
@@ -4434,7 +4484,7 @@ ${report}
     /** @param {TouchEvent} e */
     _onTouchStart(e) {
       this._touch = null;
-      if (!this._settings.swipeTouchEnabled) return;
+      if (!this._mobile.swipeTouchEnabled) return;
       if (!e.touches || e.touches.length !== 1) return;
       const pane = this._journalPanelUnder(e);
       if (!pane) return;
@@ -4465,7 +4515,7 @@ ${report}
       }
       e.preventDefault();
       if (st.committed) return;
-      const threshold = Math.abs(numOr(this._settings.swipeTouchThreshold, DEFAULTS.swipeTouchThreshold));
+      const threshold = Math.abs(numOr(this._mobile.swipeTouchThreshold, MOBILE_DEFAULTS.swipeTouchThreshold));
       if (Math.abs(dx) < threshold) return;
       if (Math.abs(dx) < Math.abs(dy) * TOUCH_COMMIT_RATIO) return;
       const travel = this._settings.swipeInverted ? -dx : dx;
@@ -4614,9 +4664,9 @@ ${report}
         name: "swipeTouchEnabled",
         label: "Enable touch swipe",
         desc: "Swipe a journal page left/right with one finger to change day \u2014 for phones, tablets, and the installed PWA. Vertical scrolling and pinch-zoom are unaffected.",
-        checked: s.swipeTouchEnabled,
+        checked: this._mobile.swipeTouchEnabled,
         onChange: /* @__PURE__ */ __name((e) => {
-          this._updateSettings({ swipeTouchEnabled: !!/** @type {HTMLInputElement} */
+          this._updateMobile({ swipeTouchEnabled: !!/** @type {HTMLInputElement} */
           e.target.checked });
         }, "onChange")
       });
@@ -4633,22 +4683,24 @@ ${report}
         right.style.gap = "6px";
         const input = document.createElement("input");
         input.type = "number";
-        input.value = String(s[key]);
+        const isMobileKey = key === "swipeTouchThreshold";
+        const commit = /* @__PURE__ */ __name((n) => isMobileKey ? this._updateMobile({ [key]: n }) : this._updateSettings({ [key]: n }), "commit");
+        input.value = String(isMobileKey ? this._mobile[key] : s[key]);
         input.className = "tps-num-input";
         input.style.width = "110px";
         input.setAttribute("aria-label", labelText);
         const live = /* @__PURE__ */ __name(() => {
           const n = Number(input.value);
-          if (Number.isFinite(n)) this._updateSettings({ [key]: n });
+          if (Number.isFinite(n)) commit(n);
         }, "live");
         const finalize = /* @__PURE__ */ __name((v) => {
           const n = Number(v);
           const next = Number.isFinite(n) ? n : (
             /** @type {Record<string, any>} */
-            DEFAULTS[key]
+            (isMobileKey ? MOBILE_DEFAULTS : DEFAULTS)[key]
           );
           input.value = String(next);
-          this._updateSettings({ [key]: next });
+          commit(next);
         }, "finalize");
         input.addEventListener("input", live);
         input.addEventListener("change", () => finalize(input.value));
@@ -4772,6 +4824,7 @@ ${report}
         size: "md",
         onClick: /* @__PURE__ */ __name(() => {
           this._updateSettings(JSON.parse(JSON.stringify(DEFAULTS)));
+          this._updateMobile({ ...MOBILE_DEFAULTS });
           try {
             this.ui.addToaster({ title: "Journal Day Shortcuts", message: "Settings reset to defaults", dismissible: true, autoDestroyTime: 2e3 });
           } catch {
@@ -4828,10 +4881,11 @@ ${report}
         }),
         section({
           label: "Touch swipe (mobile / PWA)",
-          hint: "One-finger horizontal swipe on a journal page changes the day. The gesture is classified once, on the first movement \u2014 anything that reads as vertical is left alone, so scrolling never gets hijacked. Direction follows the Invert toggle above.",
+          hint: "One-finger horizontal swipe on a journal page changes the day. Set it here, then send it to your phone; phones follow what you send, and desktop keeps its own trackpad settings. Direction follows the Invert toggle above.",
           body: [
             swipeTouchEnabledOpt,
-            swipeTouchRow
+            swipeTouchRow,
+            button({ label: "Send to phone", variant: "primary", size: "md", onClick: /* @__PURE__ */ __name(() => this._sendToPhone(), "onClick") })
           ]
         }),
         section({
