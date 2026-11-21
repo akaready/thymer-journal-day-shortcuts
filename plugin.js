@@ -190,7 +190,7 @@ var plugins = (() => {
   font-size: var(--tps-fs-body);
   line-height: var(--tps-lh-base);
   color: var(--tps-text);
-  padding: 0 var(--tps-space-5) var(--tps-space-7);
+  padding: 0 var(--tps-panel-pad-x, var(--tps-space-5)) var(--tps-space-7);
   width: 100%;
   height: 100%;
   box-sizing: border-box;
@@ -1687,6 +1687,43 @@ var plugins = (() => {
   background: var(--tps-bg-input);
   border: 1px solid var(--tps-divider);
 }
+
+/* \u2500\u2500 Narrow panels (phones, narrow windows) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+
+/* Side padding is one variable so phones can reclaim the gutter. 12px stays
+   clear of the -10px / -12px row bleed some plugin rows use. */
+@media (max-width: 640px) {
+  .tps-panel.tps-panel { --tps-panel-pad-x: var(--tps-space-3); }
+
+  /* Labels wrap instead of ellipsizing, so "Previous day" is readable. */
+  .tps-list-name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+
+  /* Icon-less rows (keyRow) drop the empty 18px icon slot and its gap. */
+  .tps-list-row:has(> :first-child:empty),
+  .tps-list-header:has(> :first-child:empty) {
+    grid-template-columns: 0 minmax(0, 1fr) auto;
+    column-gap: 0;
+  }
+  .tps-list-row:has(> :first-child:empty) > .tps-list-name { padding-right: var(--tps-space-3); }
+
+  .tps-key-chip { min-width: 72px; }
+  .tps-num-grid { grid-template-columns: minmax(0, 1fr); }
+  .tps-tabs { flex-wrap: wrap; max-width: 100%; }
+}
+
+/* Touch screens get finger-sized controls. */
+@media (pointer: coarse) {
+  .tps-panel.tps-panel {
+    --tps-control-h-sm: 36px;
+    --tps-control-h-md: 40px;
+    --tps-num-step-w:   36px;
+  }
+}
 `;
 
   // ../../shared/settings-ui/color-field.css
@@ -2810,10 +2847,6 @@ ${report}
     return el2 instanceof HTMLElement ? el2 : null;
   }
   __name(focusedPanelEl, "focusedPanelEl");
-  function isKeyboardEditing(doc = document) {
-    return doc.documentElement.classList.contains("is-keyboard-editing");
-  }
-  __name(isKeyboardEditing, "isKeyboardEditing");
 
   // ../../shared/plugin-version.js
   var CONFIG_WRITE_QUEUES_KEY = "__tpsPluginConfigWriteQueues";
@@ -3659,11 +3692,12 @@ ${report}
   __name(createSettingsStore, "createSettingsStore");
 
   // plugin.js
-  var PLUGIN_VERSION = "1.4.1";
+  var PLUGIN_VERSION = "1.4.3";
   var ROOT_CLASS = "plg-journal-day-shortcuts";
   var PANEL_TYPE = "journal-day-shortcuts-settings";
   var SWIPE_DIR_RATIO = 1.4;
   var TOUCH_COMMIT_RATIO = 3;
+  var KEYBOARD_MIN_PX = 150;
   var TOUCH_MAX_MS = 600;
   function numOr(value, fallback) {
     const n = Number(value);
@@ -3945,6 +3979,8 @@ ${report}
     /** @type {JdsSettings} */
     _settings = normalizeSettings({});
     _mobile = normalizeMobile({});
+    _kbBaseline = 0;
+    _kbW = 0;
     _mobileStore = (
       /** @type {any} */
       null
@@ -4115,6 +4151,15 @@ ${report}
 			.${ROOT_CLASS}-panel .jds-zone-control .jds-mini-unit {
 				font-size: var(--tps-fs-hint);
 				color: var(--tps-text-muted);
+			}
+			@media (max-width: 640px) {
+				.${ROOT_CLASS}-panel .jds-zone-row {
+					grid-template-columns: minmax(0, 1fr);
+					row-gap: var(--tps-space-2);
+				}
+				.${ROOT_CLASS}-panel .jds-zone-left { min-height: 0; }
+				.${ROOT_CLASS}-panel .jds-zone-desc { overflow-wrap: anywhere; }
+				.${ROOT_CLASS}-panel .jds-zone-right { align-items: start; }
 			}
 		`);
       this._cmdSettings = this.ui.addCommandPaletteCommand({
@@ -4485,13 +4530,21 @@ ${report}
         this._touchEndHandler = null;
       }
     }
-    /** True while text is being edited: Thymer's editor is active, a text field has focus, or the visible screen has shrunk for the keyboard. */
+    /**
+     * True while the on-screen keyboard is up: the visible area shrinks when it opens, so compare
+     * with the tallest visible height seen at this width. Thymer's editing state and element focus
+     * are deliberately not used: both stay set after the keyboard is dismissed and would block
+     * every swipe.
+     */
     _keyboardUp() {
-      if (isKeyboardEditing()) return true;
-      const a = document.activeElement;
-      if (a instanceof HTMLElement && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return true;
       const vv = window.visualViewport;
-      return !!vv && window.innerHeight - vv.height > 120;
+      if (!vv) return false;
+      if (vv.width !== this._kbW) {
+        this._kbW = vv.width;
+        this._kbBaseline = 0;
+      }
+      this._kbBaseline = Math.max(this._kbBaseline, vv.height);
+      return this._kbBaseline - vv.height > KEYBOARD_MIN_PX;
     }
     /** @param {TouchEvent} e */
     _onTouchStart(e) {
@@ -4513,6 +4566,10 @@ ${report}
         return;
       }
       if (st.axis === "v") return;
+      if (!st.committed && this._keyboardUp()) {
+        this._touch = null;
+        return;
+      }
       if (!st.committed && e.timeStamp - st.t0 > TOUCH_MAX_MS) {
         this._touch = null;
         return;
