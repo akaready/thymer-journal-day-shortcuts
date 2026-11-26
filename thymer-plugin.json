@@ -1,0 +1,14 @@
+{
+	"id": "akaready.journal-day-shortcuts",
+	"name": "Journal Day Shortcuts",
+	"author": "@akaready",
+	"version": "1.4.3",
+	"type": "global",
+	"description": "Keyboard shortcuts for previous/next day in the journal.",
+	"homepage": "https://github.com/akaready/thymer-journal-day-shortcuts",
+	"screenshot": "journal-day-shortcuts.png",
+	"files": {
+		"config": "plugin.json",
+		"js": "plugin.js"
+	}
+}
